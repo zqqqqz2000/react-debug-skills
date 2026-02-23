@@ -15,6 +15,28 @@ This project gives code agents with Playwright / Chrome CDP / MCP access a focus
 
 After `dist/probe.scale.js` runs in the page context, use `globalThis.ReactProbe`.
 
+### Skill Installation
+
+Installable skill in this repo: `skills/react-probe/SKILL.md`
+
+Local install:
+
+```bash
+SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
+mkdir -p "$SKILL_HOME"
+cp -R skills/react-probe/* "$SKILL_HOME/"
+```
+
+Install from GitHub by repo/path:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
+  --repo zqqqqz2000/react-master-skills \
+  --path skills/react-probe
+```
+
+Restart Codex after installation.
+
 ### API Surface
 
 - `getDomTree(findCallback?) => string`
@@ -33,28 +55,6 @@ bun run build
 ```
 
 Output artifact: `dist/probe.scale.js`
-
-### Skill Installation
-
-Installable skill in this repo: `skills/react-probe/SKILL.md`
-
-Local install:
-
-```bash
-SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
-mkdir -p "$SKILL_HOME"
-cp -R skills/react-probe/* "$SKILL_HOME/"
-```
-
-Install from GitHub by repo/path:
-
-```bash
-python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
-  --repo <owner>/<repo> \
-  --path skills/react-probe
-```
-
-Restart Codex after installation.
 
 ### Recommended Flow
 
@@ -99,6 +99,28 @@ All outputs are converged to budget and explicitly marked when reduced:
 
 运行 `dist/probe.scale.js` 后，页面上下文可使用 `globalThis.ReactProbe`。
 
+### Skill 安装
+
+本仓库内置可安装 Skill：`skills/react-probe/SKILL.md`
+
+本地安装：
+
+```bash
+SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
+mkdir -p "$SKILL_HOME"
+cp -R skills/react-probe/* "$SKILL_HOME/"
+```
+
+从 GitHub 按 repo/path 安装：
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
+  --repo zqqqqz2000/react-master-skills \
+  --path skills/react-probe
+```
+
+安装后重启 Codex。
+
 ### 能力列表
 
 - `getDomTree(findCallback?) => string`
@@ -117,28 +139,6 @@ bun run build
 ```
 
 输出文件：`dist/probe.scale.js`
-
-### Skill 安装
-
-本仓库内置可安装 Skill：`skills/react-probe/SKILL.md`
-
-本地安装：
-
-```bash
-SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
-mkdir -p "$SKILL_HOME"
-cp -R skills/react-probe/* "$SKILL_HOME/"
-```
-
-从 GitHub 按 repo/path 安装：
-
-```bash
-python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
-  --repo <owner>/<repo> \
-  --path skills/react-probe
-```
-
-安装后重启 Codex。
 
 ### 使用流程（推荐）
 
