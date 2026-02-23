@@ -15,9 +15,11 @@ This project gives code agents with Playwright / Chrome CDP / MCP access a focus
 
 After `dist/probe.scale.js` runs in the page context, use `globalThis.ReactProbe`.
 
-### Skill Installation
+### Installation (Codex / Claude Code / Cursor)
 
-Installable skill in this repo: `skills/react-probe/SKILL.md`
+Installable skill package in this repo: `skills/react-probe/SKILL.md`
+
+#### Codex
 
 Local install:
 
@@ -36,6 +38,48 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/inst
 ```
 
 Restart Codex after installation.
+
+#### Claude Code
+
+Recommended project-level setup:
+
+```bash
+cat > CLAUDE.md <<'EOF_CLAUDE'
+Use ./skills/react-probe/SKILL.md as the workflow when tasks require React runtime debugging through Playwright, Chrome CDP, or MCP.
+Focus on state/props, virtual tree, rendered HTML, and bounded output behavior.
+EOF_CLAUDE
+```
+
+Then run Claude Code from this repo directory:
+
+```bash
+claude
+```
+
+#### Cursor
+
+Option A (simple, recommended): add a root `AGENTS.md`:
+
+```bash
+cat > AGENTS.md <<'EOF_AGENTS'
+Use ./skills/react-probe/SKILL.md as the workflow when tasks require React runtime debugging through Playwright, Chrome CDP, or MCP.
+Focus on state/props, virtual tree, rendered HTML, and bounded output behavior.
+EOF_AGENTS
+```
+
+Option B (project rules):
+
+```bash
+mkdir -p .cursor/rules
+cat > .cursor/rules/react-probe.mdc <<'EOF_RULE'
+---
+description: React runtime debug workflow via React Probe
+alwaysApply: false
+---
+Use ./skills/react-probe/SKILL.md for React runtime debugging tasks.
+Prioritize state/props, virtual tree, rendered HTML, and bounded output behavior.
+EOF_RULE
+```
 
 ### API Surface
 
@@ -99,9 +143,11 @@ All outputs are converged to budget and explicitly marked when reduced:
 
 运行 `dist/probe.scale.js` 后，页面上下文可使用 `globalThis.ReactProbe`。
 
-### Skill 安装
+### 安装方式（Codex / Claude Code / Cursor）
 
-本仓库内置可安装 Skill：`skills/react-probe/SKILL.md`
+仓库内置可安装 skill：`skills/react-probe/SKILL.md`
+
+#### Codex
 
 本地安装：
 
@@ -120,6 +166,48 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/inst
 ```
 
 安装后重启 Codex。
+
+#### Claude Code
+
+推荐在项目根目录创建 `CLAUDE.md`：
+
+```bash
+cat > CLAUDE.md <<'EOF_CLAUDE'
+在涉及 Playwright、Chrome CDP、MCP 的 React 运行时调试任务中，使用 ./skills/react-probe/SKILL.md 作为工作流程。
+重点关注 state/props、虚拟树、渲染 HTML，以及预算内输出行为。
+EOF_CLAUDE
+```
+
+然后在仓库目录运行：
+
+```bash
+claude
+```
+
+#### Cursor
+
+方式 A（简单推荐）：在项目根目录创建 `AGENTS.md`：
+
+```bash
+cat > AGENTS.md <<'EOF_AGENTS'
+在涉及 Playwright、Chrome CDP、MCP 的 React 运行时调试任务中，使用 ./skills/react-probe/SKILL.md 作为工作流程。
+重点关注 state/props、虚拟树、渲染 HTML，以及预算内输出行为。
+EOF_AGENTS
+```
+
+方式 B（Project Rules）：
+
+```bash
+mkdir -p .cursor/rules
+cat > .cursor/rules/react-probe.mdc <<'EOF_RULE'
+---
+description: React runtime debug workflow via React Probe
+alwaysApply: false
+---
+使用 ./skills/react-probe/SKILL.md 处理 React 运行时调试任务。
+优先关注 state/props、虚拟树、渲染 HTML，以及预算内输出行为。
+EOF_RULE
+```
 
 ### 能力列表
 
