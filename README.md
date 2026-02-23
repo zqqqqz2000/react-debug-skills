@@ -25,7 +25,7 @@ Install from GitHub by repo/path:
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
-  --repo zqqqqz2000/react-master-skills \
+  --repo zqqqqz2000/react-debug-skills \
   --path skills/react-probe
 ```
 
@@ -157,7 +157,7 @@ All outputs are converged to budget and explicitly marked when reduced:
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
-  --repo zqqqqz2000/react-master-skills \
+  --repo zqqqqz2000/react-debug-skills \
   --path skills/react-probe
 ```
 
