@@ -5,7 +5,7 @@
 <a id="english"></a>
 ## English
 
-This project gives code agents with Playwright / Chrome CDP / MCP access a focused React debugging surface to inspect:
+This project gives code agents with Playwright / Chrome CDP / MCP access, including Electron renderer pages, a focused React debugging surface to inspect:
 
 - component `state`
 - component `props`
@@ -89,6 +89,12 @@ EOF_RULE
 - `getReactStateAndHooks(reactPath, transform?) => string`
 - `screenshotByXPath(htmlXPath) => ScreenshotPlan`
 
+### Electron Renderer Context
+
+1. Run `dist/probe.scale.js` in the Electron renderer page context.
+2. Use the same `globalThis.ReactProbe` API flow as browser pages.
+3. Focus this workflow on renderer-side React debugging output.
+
 ### Build and Verify
 
 ```bash
@@ -137,7 +143,7 @@ All outputs are converged to budget and explicitly marked when reduced:
 <a id="zh"></a>
 ## 中文
 
-给带有 Playwright / Chrome CDP / MCP 能力的 Code Agent 提供一组 React 调试能力，用于定位和读取：
+给带有 Playwright / Chrome CDP / MCP 能力（含 Electron renderer 页面）的 Code Agent 提供一组 React 调试能力，用于定位和读取：
 
 - 组件 `state`
 - 组件 `props`
@@ -220,6 +226,12 @@ EOF_RULE
 - `getReactRenderedHtml(reactPath) => string`
 - `getReactStateAndHooks(reactPath, transform?) => string`
 - `screenshotByXPath(htmlXPath) => ScreenshotPlan`
+
+### Electron Renderer 场景
+
+1. 在 Electron renderer 页面上下文执行 `dist/probe.scale.js`。
+2. 使用与浏览器页面一致的 `globalThis.ReactProbe` 调用流程。
+3. 以 renderer 侧 React 调试输出为主线。
 
 ### 构建与验证
 

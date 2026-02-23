@@ -1,6 +1,6 @@
 ---
 name: react-probe
-description: "Operate ReactProbe in Playwright/Chrome CDP/MCP debugging sessions for React-focused inspection: component lookup, reactPath navigation, state/hooks extraction, props visibility, and rendered HTML retrieval with bounded output."
+description: "Operate ReactProbe in Playwright/Chrome CDP/MCP debugging sessions, including Electron renderer contexts, for React-focused inspection: component lookup, reactPath navigation, state/hooks extraction, props visibility, and rendered HTML retrieval with bounded output."
 ---
 
 # React Probe
@@ -10,6 +10,12 @@ description: "Operate ReactProbe in Playwright/Chrome CDP/MCP debugging sessions
 1. Use the prebuilt `dist/probe.scale.js` from this repository.
 2. Load it into the target page via Playwright `addInitScript` or CDP `Runtime.evaluate`.
 3. Ensure `globalThis.ReactProbe` exists before calling APIs.
+
+## Electron Scope (Renderer-Only)
+
+- Use this skill in Electron renderer pages.
+- Run the same renderer-side workflow as browser pages: execute `dist/probe.scale.js` in the renderer context, then call `globalThis.ReactProbe.*`.
+- Keep the workflow focused on React runtime inspection in renderer context: state, props, reactPath, virtual tree, rendered HTML, and screenshot plans.
 
 ## Public APIs
 
