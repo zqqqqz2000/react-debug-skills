@@ -63,13 +63,13 @@ Candidate list output should include at least:
 Use CDP to debug Electron renderer. Standard flow: start Electron with `--remote-debugging-port`, connect via `chromium.connectOverCDP()`, select the correct `page` target, load `REACT_PROBE_BUNDLE` (`probe.scale.js`), then run click/state-read/cropped-screenshot operations.
 
 ```bash
-# 1) 启动 Electron（示例）
+# 1) Start Electron (example)
 REACT_PROBE_BUNDLE=/absolute/path/to/probe.scale.js \
   electron . --remote-debugging-port=9333
 ```
 
 ```js
-// 2) 用 CDP 连接并执行调试（示例）
+// 2) Connect via CDP and run debug flow (example)
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
@@ -98,7 +98,7 @@ function resolveProbeBundle() {
   const browser = await chromium.connectOverCDP("http://127.0.0.1:9333");
   const context = browser.contexts()[0];
 
-  // 选择 renderer target：优先业务 page
+  // Select renderer target: prefer business page
   const pages = context.pages();
   const candidates = pages.filter((p) => /localhost|index\.html/.test(p.url()));
   const page = candidates.length === 1 ? candidates[0] : (candidates[0] || pages[0]);
@@ -110,10 +110,10 @@ function resolveProbeBundle() {
   const hasProbe = await page.evaluate(() => Boolean(globalThis.ReactProbe));
   if (!hasProbe) throw new Error("ReactProbe injection failed");
 
-  // 点击操作（示例）
+  // Click operation (example)
   await page.locator("a", { hasText: "Ref 1" }).first().click();
 
-  // React 调试读取（示例）
+  // React debug read (example)
   const tree = await page.evaluate(() =>
     globalThis.ReactProbe.getReactTree((react) =>
       react.query({ displayName: "App" })
@@ -121,7 +121,7 @@ function resolveProbeBundle() {
   );
   console.log(tree);
 
-  // 仅截元素区域，不截整页（示例）
+  // Capture element region only, not full page (example)
   const box = await page.locator("text=TOOLS").first().boundingBox();
   if (box) {
     await page.screenshot({
@@ -163,6 +163,9 @@ Use this fallback order for production lookup:
 5. Verify rendered output via `getReactRenderedHtml(reactPath)`.
 
 ## `transform` Cookbook
+
+These recipes are business-specific examples that demonstrate writing style and approach only.
+Write the actual `transform` input/output based on real props and runtime structure in your target app.
 
 Constraints for `transform` output:
 
