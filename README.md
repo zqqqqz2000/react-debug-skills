@@ -21,20 +21,20 @@ Installable skill package in this repo: `skills/react-probe/SKILL.md`
 
 #### Codex
 
-Local install:
-
-```bash
-SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
-mkdir -p "$SKILL_HOME"
-cp -R skills/react-probe/* "$SKILL_HOME/"
-```
-
 Install from GitHub by repo/path:
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
   --repo zqqqqz2000/react-master-skills \
   --path skills/react-probe
+```
+
+Local install:
+
+```bash
+SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
+mkdir -p "$SKILL_HOME"
+cp -R skills/react-probe/* "$SKILL_HOME/"
 ```
 
 Restart Codex after installation.
@@ -100,7 +100,9 @@ bun run build
 
 Output artifact: `dist/probe.scale.js`
 
-### Recommended Flow
+### Skill Behavior for LLM: Flow
+
+This section describes the workflow that the skill instructs LLM agents to follow.
 
 1. Use `getReactTree((react) => react.query(criteria))` to locate candidate components.
 2. Extract `(@reactPath=...)` from output lines.
@@ -112,7 +114,9 @@ Output artifact: `dist/probe.scale.js`
 - `/Root[0]/App[0]`
 - `/Root[0]/App[0]/Dashboard[0]/section[0]/ul[0]/Row2[37]`
 
-### Budget and Fallback
+### Skill Behavior for LLM: Budget and Fallback Details
+
+This section describes budget and fallback behavior enforced by the skill for LLM-facing output.
 
 Internal fixed budgets (not exposed as runtime function parameters):
 
@@ -149,20 +153,20 @@ All outputs are converged to budget and explicitly marked when reduced:
 
 #### Codex
 
-本地安装：
-
-```bash
-SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
-mkdir -p "$SKILL_HOME"
-cp -R skills/react-probe/* "$SKILL_HOME/"
-```
-
 从 GitHub 按 repo/path 安装：
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
   --repo zqqqqz2000/react-master-skills \
   --path skills/react-probe
+```
+
+本地安装：
+
+```bash
+SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
+mkdir -p "$SKILL_HOME"
+cp -R skills/react-probe/* "$SKILL_HOME/"
 ```
 
 安装后重启 Codex。
@@ -228,7 +232,9 @@ bun run build
 
 输出文件：`dist/probe.scale.js`
 
-### 使用流程（推荐）
+### Skill 内给 LLM 的行为：使用流程
+
+本节描述 skill 提示 LLM agent 遵循的工作流程。
 
 1. 用 `getReactTree((react) => react.query(criteria))` 找候选组件
 2. 从输出中提取 `(@reactPath=...)`
@@ -240,7 +246,9 @@ bun run build
 - `/Root[0]/App[0]`
 - `/Root[0]/App[0]/Dashboard[0]/section[0]/ul[0]/Row2[37]`
 
-### 预算与降级
+### Skill 内给 LLM 的行为：预算与降级细节
+
+本节描述 skill 对面向 LLM 输出施加的预算与降级行为。
 
 内部固定预算（不走函数参数）：
 
