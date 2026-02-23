@@ -2,9 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, readFileSync } from "node:fs";
 
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
+import { resolveReactProbeBundlePath, selectCdpPageTarget } from "../src/host";
 
 const PROJECT_ROOT = "/Users/jpx/Documents/react-master";
-const DIST_FILE = `${PROJECT_ROOT}/dist/probe.scale.js`;
 const TMP_DIR = `${PROJECT_ROOT}/.tmp-e2e`;
 const INDEPENDENT_APP_ENTRY = `${PROJECT_ROOT}/test/fixtures/independent-react-app/main.tsx`;
 const INDEPENDENT_APP_BUNDLE = `${TMP_DIR}/independent-react-app.bundle.js`;
@@ -49,22 +49,82 @@ type ReactIRForTest = {
 
 type ScreenshotPlanForTest = {
   matched: number;
+  resolved: number;
   returned: number;
   omitted: number;
+  matchStrategy: "deepest" | "first" | "all";
   maxScreenshots: number;
   items: Array<{
     xpath: string;
+    resolvedXPath: string;
+    matchIndex: number;
+    rawRect: { x: number; y: number; width: number; height: number };
+    clippedRect: { x: number; y: number; width: number; height: number };
+    devicePixelRatio: number;
     clip: { x: number; y: number; width: number; height: number };
     clipped: boolean;
   }>;
 };
 
+type RectPlanForTest = {
+  matched: number;
+  resolved: number;
+  returned: number;
+  omitted: number;
+  matchStrategy: "deepest" | "first" | "all";
+  items: Array<{
+    xpath: string;
+    resolvedXPath: string;
+    matchIndex: number;
+    rawRect: { x: number; y: number; width: number; height: number };
+    visibility: "visible" | "hidden";
+    inViewport: boolean;
+    devicePixelRatio: number;
+  }>;
+};
+
+type BudgetInfoForTest = {
+  budget: {
+    MAX_CHARS: number;
+    VALUE_MAX_CHARS: number;
+    MAX_NODES: number;
+    MAX_SCREENSHOTS: number;
+    CLIP_MAX_WIDTH: number;
+    CLIP_MAX_HEIGHT: number;
+    MAX_DEPTH: number;
+  };
+  source: "default" | "override";
+  effectiveAt: string;
+  lastRunStats: {
+    api: string;
+    charCount: number;
+    truncated: boolean;
+    omitted: boolean;
+    timestamp: string;
+  } | null;
+};
+
 type ProbeApiForTest = {
   getDomTree: (findCallback?: (dom: unknown) => ProbeNodeForTest | ProbeNodeForTest[]) => string;
   getReactTree: (findCallback?: (react: ReactIRForTest) => ProbeNodeForTest | ProbeNodeForTest[]) => string;
+  getReactTreeJson: (findCallback?: (react: ReactIRForTest) => ProbeNodeForTest | ProbeNodeForTest[]) => string;
   getReactRenderedHtml: (reactPath: string) => string;
   getReactStateAndHooks: (reactPath: string, transform?: (full: unknown) => unknown) => string;
-  screenshotByXPath: (htmlXPath: string) => ScreenshotPlanForTest;
+  getReactStateAndHooksJson: (reactPath: string, transform?: (full: unknown) => unknown) => string;
+  screenshotByXPath: (
+    htmlXPath: string,
+    options?: { matchStrategy?: "deepest" | "first" | "all"; excludeAncestors?: boolean; limit?: number }
+  ) => ScreenshotPlanForTest;
+  getRectsByXPath: (
+    htmlXPath: string,
+    options?: { matchStrategy?: "deepest" | "first" | "all"; excludeAncestors?: boolean; limit?: number }
+  ) => RectPlanForTest;
+  getRectsByText: (
+    text: string,
+    options?: { matchStrategy?: "deepest" | "first" | "all"; excludeAncestors?: boolean; limit?: number }
+  ) => RectPlanForTest;
+  getRectByReactPath: (reactPath: string) => RectPlanForTest["items"][number] | null;
+  getBudgetInfo: () => BudgetInfoForTest;
 };
 
 function decodeOutput(bytes: Uint8Array): string {
@@ -88,7 +148,15 @@ function runBuildCommand(command: string[], label: string): void {
 
 function buildProbeScript(): string {
   runBuildCommand(["bun", "run", "build"], "probe build");
-  return readFileSync(DIST_FILE, "utf8");
+  const resolved = resolveReactProbeBundlePath({
+    env: {
+      HOME: Bun.env.HOME,
+      CODEX_HOME: Bun.env.CODEX_HOME
+    },
+    skillDir: PROJECT_ROOT,
+    cwd: PROJECT_ROOT
+  });
+  return readFileSync(resolved.bundlePath, "utf8");
 }
 
 function buildIndependentReactAppScript(): string {
@@ -151,7 +219,7 @@ async function cdpEvaluate(session: CDPSession, expression: string): Promise<unk
 }
 
 describe("playwright/cdp e2e", () => {
-  const EXPECTED_CASES = 11;
+  const EXPECTED_CASES = 14;
   let browser: Browser;
   let probeScript = "";
   let independentReactAppScript = "";
@@ -440,6 +508,103 @@ describe("playwright/cdp e2e", () => {
     await page.close();
   });
 
+  test("playwright supports tree/state JSON APIs with meta", async () => {
+    const page = await newPageWithIndependentApp(browser, probeScript, independentReactAppScript, "initScript");
+
+    const treeJson = await page.evaluate(() => {
+      const probe = (globalThis as typeof globalThis & { ReactProbe: ProbeApiForTest }).ReactProbe;
+      return probe.getReactTreeJson((react) => react.query({ displayName: "App" }));
+    });
+    const treeParsed = JSON.parse(treeJson) as {
+      data: Array<{ reactPath?: string }>;
+      meta: { truncated: boolean; omitted: boolean; nodeCount: number; charCount: number };
+    };
+    expect(Array.isArray(treeParsed.data)).toBe(true);
+    expect(treeParsed.meta.nodeCount).toBeGreaterThan(0);
+    expect(treeParsed.meta.charCount).toBeGreaterThan(0);
+
+    const appPath = await page.evaluate(() => {
+      const probe = (globalThis as typeof globalThis & { ReactProbe: ProbeApiForTest }).ReactProbe;
+      const selected = probe.getReactTree((react) => react.findOne({ displayName: "App" }));
+      const match = selected.match(/\(@reactPath=([^)]+)\)/);
+      if (match === null || match[1] === undefined) {
+        throw new Error("App reactPath missing");
+      }
+      return match[1];
+    });
+
+    const stateJson = await page.evaluate((path) => {
+      const probe = (globalThis as typeof globalThis & { ReactProbe: ProbeApiForTest }).ReactProbe;
+      return probe.getReactStateAndHooksJson(path, (full) => ({
+        displayName: (full as { displayName?: string }).displayName
+      }));
+    }, appPath);
+    const stateParsed = JSON.parse(stateJson) as {
+      data: { displayName?: string };
+      meta: { charCount: number };
+    };
+    expect(stateParsed.data.displayName).toBe("App");
+    expect(stateParsed.meta.charCount).toBeGreaterThan(0);
+
+    await page.close();
+  });
+
+  test("playwright supports coordinate APIs and strategy-based screenshot planning", async () => {
+    const page = await newPageWithIndependentApp(browser, probeScript, independentReactAppScript, "initScript");
+
+    const strategyPlan = await page.evaluate(() => {
+      const wrap = document.createElement("section");
+      wrap.setAttribute("data-testid", "nest-wrap");
+      const inner = document.createElement("div");
+      inner.setAttribute("data-testid", "nest-inner");
+      const leaf = document.createElement("span");
+      leaf.setAttribute("data-testid", "nest-leaf");
+      leaf.textContent = "LEAF_TEXT";
+      inner.appendChild(leaf);
+      wrap.appendChild(inner);
+      document.body.appendChild(wrap);
+
+      const probe = (globalThis as typeof globalThis & { ReactProbe: ProbeApiForTest }).ReactProbe;
+      return probe.screenshotByXPath(
+        "//*[@data-testid='nest-wrap' or @data-testid='nest-inner' or @data-testid='nest-leaf']",
+        { matchStrategy: "deepest", limit: 5 }
+      );
+    });
+
+    expect(strategyPlan.matched).toBe(3);
+    expect(strategyPlan.resolved).toBe(1);
+    expect(strategyPlan.returned).toBe(1);
+    expect(strategyPlan.items[0]?.resolvedXPath).toContain("span");
+    expect(strategyPlan.items[0]?.rawRect.width).toBeGreaterThanOrEqual(0);
+    expect(strategyPlan.items[0]?.devicePixelRatio).toBeGreaterThan(0);
+
+    const textRects = await page.evaluate(() => {
+      const probe = (globalThis as typeof globalThis & { ReactProbe: ProbeApiForTest }).ReactProbe;
+      return probe.getRectsByText("LEAF_TEXT", { matchStrategy: "first" });
+    });
+    expect(textRects.returned).toBe(1);
+    expect(textRects.items[0]?.inViewport).toBe(true);
+
+    await page.close();
+  });
+
+  test("playwright budget info exposes last run stats", async () => {
+    const page = await newPageWithIndependentApp(browser, probeScript, independentReactAppScript, "initScript");
+
+    const info = await page.evaluate(() => {
+      const probe = (globalThis as typeof globalThis & { ReactProbe: ProbeApiForTest }).ReactProbe;
+      probe.getReactTree();
+      return probe.getBudgetInfo();
+    });
+
+    expect(info.budget.MAX_CHARS).toBe(BUDGET_MAX_CHARS);
+    expect(info.source === "default" || info.source === "override").toBe(true);
+    expect(info.lastRunStats?.api).toBe("getReactTree");
+    expect((info.lastRunStats?.charCount ?? 0) > 0).toBe(true);
+
+    await page.close();
+  });
+
   test("playwright e2e covers Stage0..Stage4 fallback markers via callback outputs", async () => {
     const page = await newPageWithIndependentApp(browser, probeScript, independentReactAppScript, "initScript");
 
@@ -605,6 +770,25 @@ describe("playwright/cdp e2e", () => {
 
     await page.waitForSelector('[data-testid="leaf"]');
 
+    const contextPages = page.context().pages();
+    const descriptors = await Promise.all(
+      contextPages.map(async (item, index) => ({
+        id: String(index),
+        type: "page",
+        url: item.url(),
+        title: await item.title()
+      }))
+    );
+    const selection = selectCdpPageTarget(descriptors, {
+      allowUrlPatterns: [/about:blank|data:text|localhost|127\\.0\\.0\\.1/]
+    });
+    const selectedIndex = Number(selection.selected.id);
+    const selectedPage = contextPages[selectedIndex];
+    if (selectedPage === undefined) {
+      throw new Error("selected cdp page missing");
+    }
+    expect(selectedPage.url()).toBe(page.url());
+
     const tree = await cdpEvaluate(session, "globalThis.ReactProbe.getReactTree()");
     expect(typeof tree).toBe("string");
     expect(String(tree)).toContain("App");
@@ -685,6 +869,32 @@ describe("playwright/cdp e2e", () => {
     expect(typedPlan.matched).toBe(1);
     expect(typedPlan.returned).toBe(1);
     expect(typedPlan.maxScreenshots).toBe(5);
+    expect(typedPlan.items[0]?.rawRect.width).toBeGreaterThanOrEqual(0);
+
+    const treeJson = await cdpEvaluate(
+      session,
+      `globalThis.ReactProbe.getReactTreeJson((react) => react.query({ displayName: "App" }))`
+    );
+    const typedTreeJson = JSON.parse(String(treeJson)) as {
+      data: unknown[];
+      meta: { nodeCount: number; charCount: number };
+    };
+    expect(Array.isArray(typedTreeJson.data)).toBe(true);
+    expect(typedTreeJson.meta.nodeCount).toBeGreaterThan(0);
+    expect(typedTreeJson.meta.charCount).toBeGreaterThan(0);
+
+    const rectsByText = await cdpEvaluate(
+      session,
+      `globalThis.ReactProbe.getRectsByXPath("//section[@data-testid='settings']", { matchStrategy: "first" })`
+    );
+    const typedRects = rectsByText as RectPlanForTest;
+    expect(typedRects.returned).toBe(1);
+    expect(typeof typedRects.items[0]?.inViewport).toBe("boolean");
+
+    const budgetInfo = await cdpEvaluate(session, `globalThis.ReactProbe.getBudgetInfo()`);
+    const typedBudget = budgetInfo as BudgetInfoForTest;
+    expect(typedBudget.budget.MAX_CHARS).toBe(BUDGET_MAX_CHARS);
+    expect(typedBudget.lastRunStats).not.toBeNull();
 
     await page.close();
   });

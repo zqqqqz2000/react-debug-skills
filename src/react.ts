@@ -3,11 +3,15 @@ import {
   assertNodeOrNodes,
   clipValue,
   convergeStringBudget,
+  fits,
+  getBudgetInfo,
+  getBudgetedTreeSnapshot,
+  recordBudgetRunStatsFromOutput,
   renderWithBudget
 } from "./budget";
 import { getDataAttrs, getNodeXPath } from "./dom";
 import { safeStringify } from "./safeStringify";
-import type { FiberNodeLike, NodeKV, ReactIR, ReactNode, ReactQuery } from "./types";
+import type { FiberNodeLike, NodeKV, ReactIR, ReactNode, ReactQuery, RectItem } from "./types";
 
 type FiberRootLike = {
   current?: FiberNodeLike | null;
@@ -593,11 +597,180 @@ export function createReactIR(): ReactIR {
   };
 }
 
+type BudgetTreeSnapshot = {
+  roots: ReactNode[];
+  omittedMatches: number;
+  markers: string[];
+  preview?: string;
+};
+
+function countNodeTree(nodes: Array<{ children?: unknown }>): number {
+  let count = 0;
+  const stack: Array<{ children?: unknown }> = [];
+  for (const node of nodes) {
+    stack.push(node);
+  }
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) {
+      continue;
+    }
+    count += 1;
+    if (Array.isArray(current.children)) {
+      for (const child of current.children) {
+        if (isRecord(child)) {
+          stack.push(child);
+        }
+      }
+    }
+  }
+  return count;
+}
+
+function countJsonEntries(value: unknown): number {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (typeof value !== "object") {
+    return 1;
+  }
+  if (Array.isArray(value)) {
+    let count = 1;
+    for (const item of value) {
+      count += countJsonEntries(item);
+    }
+    return count;
+  }
+  let count = 1;
+  for (const item of Object.values(value)) {
+    count += countJsonEntries(item);
+  }
+  return count;
+}
+
+function serializeJsonEnvelope(data: unknown, meta: Record<string, unknown>): string {
+  const first = safeStringify({
+    data,
+    meta: {
+      ...meta,
+      charCount: 0
+    }
+  });
+  const parsed = JSON.parse(first) as { data: unknown; meta: Record<string, unknown> };
+  const withCharCount = {
+    data: parsed.data,
+    meta: {
+      ...parsed.meta,
+      charCount: first.length
+    }
+  };
+  return safeStringify(withCharCount);
+}
+
+function toTruncatedFlag(markers: string[], preview: string | undefined): boolean {
+  if (preview !== undefined) {
+    return true;
+  }
+  return markers.some((marker) => marker.includes("STAGE") || marker.includes("HARD_CLIP"));
+}
+
+function toOmittedFlag(markers: string[], omittedMatches: number): boolean {
+  if (omittedMatches > 0) {
+    return true;
+  }
+  if (markers.some((marker) => marker.includes("OMITTED"))) {
+    return true;
+  }
+  return markers.some((marker) => marker.includes("STAGE3") || marker.includes("STAGE4"));
+}
+
 export function getReactTree(findCallback?: (react: ReactIR) => ReactNode | ReactNode[]): string {
   const reactIR = createReactIR();
   const selected = findCallback === undefined ? reactIR.roots : findCallback(reactIR);
   assertNodeOrNodes(selected);
-  return renderWithBudget(selected);
+  const output = renderWithBudget(selected);
+  recordBudgetRunStatsFromOutput("getReactTree", output);
+  return output;
+}
+
+export function getReactTreeJson(findCallback?: (react: ReactIR) => ReactNode | ReactNode[]): string {
+  const reactIR = createReactIR();
+  const selected = findCallback === undefined ? reactIR.roots : findCallback(reactIR);
+  assertNodeOrNodes(selected);
+
+  const snapshot = JSON.parse(getBudgetedTreeSnapshot(selected)) as BudgetTreeSnapshot;
+  const nodeCount = countNodeTree(snapshot.roots);
+  const budget = getBudgetInfo();
+
+  const fullMeta = {
+    truncated: toTruncatedFlag(snapshot.markers, snapshot.preview),
+    omitted: toOmittedFlag(snapshot.markers, snapshot.omittedMatches),
+    omittedMatches: snapshot.omittedMatches,
+    nodeCount,
+    markers: snapshot.markers,
+    budget
+  };
+
+  const payloadCandidates: Array<{ data: unknown; meta: Record<string, unknown> }> = [
+    {
+      data: snapshot.roots,
+      meta: fullMeta
+    },
+    {
+      data: snapshot.roots,
+      meta: {
+        truncated: fullMeta.truncated,
+        omitted: fullMeta.omitted,
+        omittedMatches: snapshot.omittedMatches,
+        nodeCount,
+        budget
+      }
+    },
+    {
+      data: snapshot.roots.slice(0, 1),
+      meta: {
+        truncated: true,
+        omitted: true,
+        omittedMatches: snapshot.omittedMatches,
+        nodeCount: countNodeTree(snapshot.roots.slice(0, 1)),
+        budget
+      }
+    },
+    {
+      data: {
+        preview: clipValue(snapshot.preview ?? renderWithBudget(selected))
+      },
+      meta: {
+        truncated: true,
+        omitted: true,
+        omittedMatches: snapshot.omittedMatches,
+        nodeCount: 1,
+        budget
+      }
+    }
+  ];
+
+  for (const candidate of payloadCandidates) {
+    const serialized = serializeJsonEnvelope(candidate.data, candidate.meta);
+    if (fits(serialized)) {
+      recordBudgetRunStatsFromOutput("getReactTreeJson", serialized);
+      return serialized;
+    }
+  }
+
+  const emergency = serializeJsonEnvelope(
+    { preview: clipValue(renderWithBudget(selected)) },
+    {
+      truncated: true,
+      omitted: true,
+      omittedMatches: snapshot.omittedMatches,
+      nodeCount: 1,
+      budget
+    }
+  );
+  recordBudgetRunStatsFromOutput("getReactTreeJson", emergency);
+  return emergency;
 }
 
 function readDomFragment(node: Node): string {
@@ -623,6 +796,7 @@ export function getReactRenderedHtml(reactPath: string): string {
   const fiber = findFiberByPath(reactPath);
   const hostNodes = collectHostDomNodesFromFiber(fiber, BUDGET.MAX_NODES * 4);
   if (hostNodes.length === 0) {
+    recordBudgetRunStatsFromOutput("getReactRenderedHtml", "");
     return "";
   }
 
@@ -640,7 +814,9 @@ export function getReactRenderedHtml(reactPath: string): string {
     output = `${output}\n…(OMITTED_MATCHES, omitted=${omitted})`;
   }
 
-  return convergeStringBudget(output);
+  const converged = convergeStringBudget(output);
+  recordBudgetRunStatsFromOutput("getReactRenderedHtml", converged);
+  return converged;
 }
 
 function collectHooksFromMemoizedState(memoizedState: unknown): Array<Record<string, unknown>> {
@@ -707,5 +883,109 @@ export function getReactStateAndHooks(reactPath: string, transform?: (full: unkn
   const full = extractStateAndHooks(fiber, reactPath);
   const transformed = transform === undefined ? full : transform(full);
   const serialized = safeStringify(transformed);
-  return convergeStringBudget(serialized);
+  const converged = convergeStringBudget(serialized);
+  recordBudgetRunStatsFromOutput("getReactStateAndHooks", converged);
+  return converged;
+}
+
+export function getReactStateAndHooksJson(reactPath: string, transform?: (full: unknown) => unknown): string {
+  const fiber = findFiberByPath(reactPath);
+  const full = extractStateAndHooks(fiber, reactPath);
+  const transformed = transform === undefined ? full : transform(full);
+  const safeDataText = safeStringify(transformed);
+  const parsedData = JSON.parse(safeDataText) as unknown;
+  const budget = getBudgetInfo();
+
+  const firstCandidate = serializeJsonEnvelope(parsedData, {
+    truncated: false,
+    omitted: false,
+    nodeCount: countJsonEntries(parsedData),
+    budget
+  });
+  if (fits(firstCandidate)) {
+    recordBudgetRunStatsFromOutput("getReactStateAndHooksJson", firstCandidate);
+    return firstCandidate;
+  }
+
+  const clipped = convergeStringBudget(safeDataText);
+  const secondCandidate = serializeJsonEnvelope(
+    {
+      preview: clipValue(clipped)
+    },
+    {
+      truncated: true,
+      omitted: true,
+      nodeCount: 1,
+      budget
+    }
+  );
+  recordBudgetRunStatsFromOutput("getReactStateAndHooksJson", secondCandidate);
+  return secondCandidate;
+}
+
+function toRectNumber(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  return value;
+}
+
+function getElementVisibility(element: Element): "visible" | "hidden" {
+  const style = window.getComputedStyle(element);
+  const opacityValue = Number.parseFloat(style.opacity);
+  const hasOpacity = style.opacity.trim().length > 0 && Number.isFinite(opacityValue);
+  if (style.display === "none" || style.visibility === "hidden" || (hasOpacity && opacityValue === 0)) {
+    return "hidden";
+  }
+  return "visible";
+}
+
+function getInViewport(rawRect: { x: number; y: number; width: number; height: number }): boolean {
+  const viewportLeft = window.scrollX;
+  const viewportTop = window.scrollY;
+  const viewportRight = viewportLeft + window.innerWidth;
+  const viewportBottom = viewportTop + window.innerHeight;
+  const right = rawRect.x + rawRect.width;
+  const bottom = rawRect.y + rawRect.height;
+  return (
+    rawRect.width > 0 &&
+    rawRect.height > 0 &&
+    right > viewportLeft &&
+    rawRect.x < viewportRight &&
+    bottom > viewportTop &&
+    rawRect.y < viewportBottom
+  );
+}
+
+export function getRectByReactPath(reactPath: string): RectItem | null {
+  const fiber = findFiberByPath(reactPath);
+  const hostNodes = collectHostDomNodesFromFiber(fiber, BUDGET.MAX_NODES);
+  const firstElement = hostNodes.find((entry) => entry instanceof Element);
+  if (!(firstElement instanceof Element)) {
+    recordBudgetRunStatsFromOutput("getRectByReactPath", "null");
+    return null;
+  }
+
+  const rect = firstElement.getBoundingClientRect();
+  const rawRect = {
+    x: toRectNumber(rect.left + window.scrollX),
+    y: toRectNumber(rect.top + window.scrollY),
+    width: toRectNumber(rect.width),
+    height: toRectNumber(rect.height)
+  };
+
+  const item: RectItem = {
+    xpath: getNodeXPath(firstElement),
+    resolvedXPath: getNodeXPath(firstElement),
+    matchIndex: 0,
+    rawRect,
+    visibility: getElementVisibility(firstElement),
+    inViewport: getInViewport(rawRect),
+    devicePixelRatio: toRectNumber(window.devicePixelRatio || 1)
+  };
+  recordBudgetRunStatsFromOutput("getRectByReactPath", safeStringify(item));
+  return item;
 }

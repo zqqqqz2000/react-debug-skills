@@ -3,8 +3,17 @@ import React from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { getDomTree, screenshotByXPath } from "../src/dom";
-import { createReactIR, getReactRenderedHtml, getReactStateAndHooks, getReactTree } from "../src/react";
+import { getBudgetInfo } from "../src/budget";
+import { getDomTree, getRectsByText, getRectsByXPath, screenshotByXPath } from "../src/dom";
+import {
+  createReactIR,
+  getRectByReactPath,
+  getReactRenderedHtml,
+  getReactStateAndHooks,
+  getReactStateAndHooksJson,
+  getReactTree,
+  getReactTreeJson
+} from "../src/react";
 import type { ReactNode } from "../src/types";
 import { installDom, uninstallDom } from "./helpers";
 
@@ -84,5 +93,25 @@ describe("react e2e", () => {
     const screenshotPlan = screenshotByXPath("//section[@data-testid='counter']");
     expect(screenshotPlan.matched).toBe(1);
     expect(screenshotPlan.returned).toBe(1);
+
+    const rectsByXPath = getRectsByXPath("//section[@data-testid='counter']", { matchStrategy: "first" });
+    expect(rectsByXPath.returned).toBe(1);
+
+    const rectsByText = getRectsByText("count:3", { matchStrategy: "first" });
+    expect(rectsByText.returned).toBe(1);
+
+    const rectByPath = getRectByReactPath(counterNode.reactPath);
+    expect(rectByPath).not.toBeNull();
+
+    const treeJson = getReactTreeJson((react) => react.query({ displayName: "Counter" }));
+    const treeParsed = JSON.parse(treeJson) as { meta: { nodeCount: number } };
+    expect(treeParsed.meta.nodeCount).toBeGreaterThan(0);
+
+    const stateJson = getReactStateAndHooksJson(counterNode.reactPath, (full) => full);
+    const stateParsed = JSON.parse(stateJson) as { meta: { charCount: number } };
+    expect(stateParsed.meta.charCount).toBeGreaterThan(0);
+
+    const budgetInfo = getBudgetInfo();
+    expect(budgetInfo.lastRunStats).not.toBeNull();
   });
 });

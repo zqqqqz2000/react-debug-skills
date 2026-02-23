@@ -1,5 +1,12 @@
-import { BUDGET, assertNodeOrNodes, renderWithBudget } from "./budget";
-import type { DomIR, DomNode, NodeKV, ScreenshotPlan } from "./types";
+import {
+  BUDGET,
+  assertNodeOrNodes,
+  recordBudgetRunStatsFromFlags,
+  recordBudgetRunStatsFromOutput,
+  renderWithBudget
+} from "./budget";
+import { safeStringify } from "./safeStringify";
+import type { DomIR, DomNode, MatchOptions, NodeKV, RectItem, RectPlan, ScreenshotPlan } from "./types";
 
 function toLowerTagName(element: Element): string {
   return element.tagName.toLowerCase();
@@ -163,7 +170,9 @@ export function getDomTree(findCallback?: (dom: DomIR) => DomNode | DomNode[]): 
   const domIR = createDomIR();
   const selected = findCallback === undefined ? domIR.root : findCallback(domIR);
   assertNodeOrNodes(selected);
-  return renderWithBudget(selected);
+  const output = renderWithBudget(selected);
+  recordBudgetRunStatsFromOutput("getDomTree", output);
+  return output;
 }
 
 function toNonNegativeFinite(value: number): number {
@@ -176,7 +185,28 @@ function toNonNegativeFinite(value: number): number {
   return value;
 }
 
-export function screenshotByXPath(htmlXPath: string): ScreenshotPlan {
+function resolveMatchStrategy(options: MatchOptions | undefined): "deepest" | "first" | "all" {
+  const value = options?.matchStrategy;
+  if (value === "deepest" || value === "first" || value === "all") {
+    return value;
+  }
+  return "all";
+}
+
+function resolveLimit(limit: number | undefined, fallback: number, cap: number): number {
+  if (limit === undefined) {
+    return Math.min(fallback, cap);
+  }
+  if (!Number.isFinite(limit)) {
+    return Math.min(fallback, cap);
+  }
+  if (limit <= 0) {
+    return Math.min(fallback, cap);
+  }
+  return Math.min(Math.floor(limit), cap);
+}
+
+function collectElementsByXPath(htmlXPath: string): Element[] {
   const xpathResult = document.evaluate(
     htmlXPath,
     document,
@@ -192,36 +222,222 @@ export function screenshotByXPath(htmlXPath: string): ScreenshotPlan {
       matches.push(item);
     }
   }
+  return matches;
+}
 
-  const matched = matches.length;
-  const returned = Math.min(matched, BUDGET.MAX_SCREENSHOTS);
-  const omitted = matched - returned;
+function collectElementsByText(text: string): Element[] {
+  const needle = text.trim();
+  if (needle.length === 0) {
+    return [];
+  }
+  const out: Element[] = [];
+  for (const element of Array.from(document.querySelectorAll("*"))) {
+    const content = element.textContent ?? "";
+    if (content.includes(needle)) {
+      out.push(element);
+    }
+  }
+  return out;
+}
 
-  const items = matches.slice(0, returned).map((element) => {
-    const rect = element.getBoundingClientRect();
-    const width = Math.min(toNonNegativeFinite(rect.width), BUDGET.CLIP_MAX_WIDTH);
-    const height = Math.min(toNonNegativeFinite(rect.height), BUDGET.CLIP_MAX_HEIGHT);
-    const clipped = rect.width > BUDGET.CLIP_MAX_WIDTH || rect.height > BUDGET.CLIP_MAX_HEIGHT;
+function filterDeepestElements(elements: Element[]): Element[] {
+  if (elements.length <= 1) {
+    return elements;
+  }
+  const kept: Element[] = [];
+  for (const candidate of elements) {
+    let isAncestor = false;
+    for (const other of elements) {
+      if (candidate !== other && candidate.contains(other)) {
+        isAncestor = true;
+        break;
+      }
+    }
+    if (!isAncestor) {
+      kept.push(candidate);
+    }
+  }
+  return kept;
+}
 
+function applyMatchStrategy(elements: Element[], options: MatchOptions | undefined): Element[] {
+  const strategy = resolveMatchStrategy(options);
+  const excludeAncestors = options?.excludeAncestors === true;
+
+  let selected = elements;
+  if (strategy === "deepest" || excludeAncestors) {
+    selected = filterDeepestElements(selected);
+  }
+
+  if (strategy === "first") {
+    const first = selected[0];
+    if (first === undefined) {
+      return [];
+    }
+    return [first];
+  }
+
+  return selected;
+}
+
+function getRawRect(element: Element): { x: number; y: number; width: number; height: number } {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: toNonNegativeFinite(rect.left + window.scrollX),
+    y: toNonNegativeFinite(rect.top + window.scrollY),
+    width: toNonNegativeFinite(rect.width),
+    height: toNonNegativeFinite(rect.height)
+  };
+}
+
+function getClippedRect(rawRect: { x: number; y: number; width: number; height: number }): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  return {
+    x: rawRect.x,
+    y: rawRect.y,
+    width: Math.min(rawRect.width, BUDGET.CLIP_MAX_WIDTH),
+    height: Math.min(rawRect.height, BUDGET.CLIP_MAX_HEIGHT)
+  };
+}
+
+function getVisibility(element: Element): "visible" | "hidden" {
+  const style = window.getComputedStyle(element);
+  const opacityValue = Number.parseFloat(style.opacity);
+  const hasOpacity = style.opacity.trim().length > 0 && Number.isFinite(opacityValue);
+  if (style.display === "none" || style.visibility === "hidden" || (hasOpacity && opacityValue === 0)) {
+    return "hidden";
+  }
+  return "visible";
+}
+
+function isInViewport(rawRect: { x: number; y: number; width: number; height: number }): boolean {
+  const viewportLeft = window.scrollX;
+  const viewportTop = window.scrollY;
+  const viewportRight = viewportLeft + window.innerWidth;
+  const viewportBottom = viewportTop + window.innerHeight;
+  const rectRight = rawRect.x + rawRect.width;
+  const rectBottom = rawRect.y + rawRect.height;
+  return rawRect.width > 0 &&
+    rawRect.height > 0 &&
+    rectRight > viewportLeft &&
+    rawRect.x < viewportRight &&
+    rectBottom > viewportTop &&
+    rawRect.y < viewportBottom;
+}
+
+function buildRectItems(elements: Element[]): RectItem[] {
+  return elements.map((element, index) => {
+    const rawRect = getRawRect(element);
     return {
       xpath: getElementXPath(element),
-      clip: {
-        x: toNonNegativeFinite(rect.left + window.scrollX),
-        y: toNonNegativeFinite(rect.top + window.scrollY),
-        width,
-        height
-      },
+      resolvedXPath: getElementXPath(element),
+      matchIndex: index,
+      rawRect,
+      visibility: getVisibility(element),
+      inViewport: isInViewport(rawRect),
+      devicePixelRatio: toNonNegativeFinite(window.devicePixelRatio || 1)
+    };
+  });
+}
+
+function finalizeRectPlan(
+  api: string,
+  matched: number,
+  resolved: number,
+  selected: Element[],
+  limit: number,
+  matchStrategy: "deepest" | "first" | "all"
+): RectPlan {
+  const returnedElements = selected.slice(0, limit);
+  const items = buildRectItems(returnedElements);
+  const returned = items.length;
+  const omitted = Math.max(0, resolved - returned);
+  const plan: RectPlan = {
+    matched,
+    resolved,
+    returned,
+    omitted,
+    matchStrategy,
+    items
+  };
+  recordBudgetRunStatsFromFlags(api, {
+    charCount: safeStringify(plan).length,
+    truncated: false,
+    omitted: omitted > 0
+  });
+  return plan;
+}
+
+export function getRectsByXPath(htmlXPath: string, options?: MatchOptions): RectPlan {
+  const matchedElements = collectElementsByXPath(htmlXPath);
+  const selectedElements = applyMatchStrategy(matchedElements, options);
+  const limit = resolveLimit(options?.limit, BUDGET.MAX_NODES, BUDGET.MAX_NODES);
+  return finalizeRectPlan(
+    "getRectsByXPath",
+    matchedElements.length,
+    selectedElements.length,
+    selectedElements,
+    limit,
+    resolveMatchStrategy(options)
+  );
+}
+
+export function getRectsByText(text: string, options?: MatchOptions): RectPlan {
+  const matchedElements = collectElementsByText(text);
+  const selectedElements = applyMatchStrategy(matchedElements, options);
+  const limit = resolveLimit(options?.limit, BUDGET.MAX_NODES, BUDGET.MAX_NODES);
+  return finalizeRectPlan(
+    "getRectsByText",
+    matchedElements.length,
+    selectedElements.length,
+    selectedElements,
+    limit,
+    resolveMatchStrategy(options)
+  );
+}
+
+export function screenshotByXPath(htmlXPath: string, options?: MatchOptions): ScreenshotPlan {
+  const rectPlan = getRectsByXPath(htmlXPath, {
+    ...options,
+    limit: resolveLimit(options?.limit, BUDGET.MAX_SCREENSHOTS, BUDGET.MAX_SCREENSHOTS)
+  });
+
+  const items = rectPlan.items.map((item) => {
+    const clippedRect = getClippedRect(item.rawRect);
+    const clipped =
+      clippedRect.width < item.rawRect.width || clippedRect.height < item.rawRect.height;
+    return {
+      xpath: item.xpath,
+      resolvedXPath: item.resolvedXPath,
+      matchIndex: item.matchIndex,
+      rawRect: item.rawRect,
+      clippedRect,
+      devicePixelRatio: item.devicePixelRatio,
+      clip: clippedRect,
       clipped
     };
   });
 
-  return {
-    matched,
-    returned,
-    omitted,
+  const output: ScreenshotPlan = {
+    matched: rectPlan.matched,
+    resolved: rectPlan.resolved,
+    returned: rectPlan.returned,
+    omitted: rectPlan.omitted,
     maxScreenshots: BUDGET.MAX_SCREENSHOTS,
     clipMaxWidth: BUDGET.CLIP_MAX_WIDTH,
     clipMaxHeight: BUDGET.CLIP_MAX_HEIGHT,
+    matchStrategy: rectPlan.matchStrategy,
     items
   };
+  recordBudgetRunStatsFromFlags("screenshotByXPath", {
+    charCount: safeStringify(output).length,
+    truncated: items.some((item) => item.clipped),
+    omitted: output.omitted > 0
+  });
+
+  return output;
 }

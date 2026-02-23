@@ -31,10 +31,16 @@
   var exports_src = {};
   __export(exports_src, {
     screenshotByXPath: () => screenshotByXPath,
+    getRectsByXPath: () => getRectsByXPath,
+    getRectsByText: () => getRectsByText,
+    getRectByReactPath: () => getRectByReactPath,
+    getReactTreeJson: () => getReactTreeJson,
     getReactTree: () => getReactTree,
+    getReactStateAndHooksJson: () => getReactStateAndHooksJson,
     getReactStateAndHooks: () => getReactStateAndHooks,
     getReactRenderedHtml: () => getReactRenderedHtml,
-    getDomTree: () => getDomTree
+    getDomTree: () => getDomTree,
+    getBudgetInfo: () => getBudgetInfo
   });
 
   // src/safeStringify.ts
@@ -151,6 +157,9 @@
     return candidate;
   }
   var budgetOverride = readBudgetOverride();
+  var BUDGET_SOURCE = Object.keys(budgetOverride).length > 0 ? "override" : "default";
+  var BUDGET_EFFECTIVE_AT = new Date().toISOString();
+  var lastRunStats = null;
   var BUDGET = {
     MAX_CHARS: pickBudgetNumber(budgetOverride.MAX_CHARS, MAX_CHARS),
     VALUE_MAX_CHARS: pickBudgetNumber(budgetOverride.VALUE_MAX_CHARS, VALUE_MAX_CHARS),
@@ -160,6 +169,43 @@
     CLIP_MAX_HEIGHT: pickBudgetNumber(budgetOverride.CLIP_MAX_HEIGHT, CLIP_MAX_HEIGHT),
     MAX_DEPTH: pickBudgetNumber(budgetOverride.MAX_DEPTH, MAX_DEPTH)
   };
+  function updateLastRunStats(stats) {
+    lastRunStats = stats;
+  }
+  function recordBudgetRunStatsFromOutput(api, output) {
+    updateLastRunStats({
+      api,
+      charCount: len(output),
+      truncated: output.includes("TRUNCATED"),
+      omitted: output.includes("OMITTED_"),
+      timestamp: new Date().toISOString()
+    });
+  }
+  function recordBudgetRunStatsFromFlags(api, flags) {
+    updateLastRunStats({
+      api,
+      charCount: flags.charCount,
+      truncated: flags.truncated,
+      omitted: flags.omitted,
+      timestamp: new Date().toISOString()
+    });
+  }
+  function getBudgetInfo() {
+    return {
+      budget: {
+        MAX_CHARS: BUDGET.MAX_CHARS,
+        VALUE_MAX_CHARS: BUDGET.VALUE_MAX_CHARS,
+        MAX_NODES: BUDGET.MAX_NODES,
+        MAX_SCREENSHOTS: BUDGET.MAX_SCREENSHOTS,
+        CLIP_MAX_WIDTH: BUDGET.CLIP_MAX_WIDTH,
+        CLIP_MAX_HEIGHT: BUDGET.CLIP_MAX_HEIGHT,
+        MAX_DEPTH: BUDGET.MAX_DEPTH
+      },
+      source: BUDGET_SOURCE,
+      effectiveAt: BUDGET_EFFECTIVE_AT,
+      lastRunStats
+    };
+  }
   function isRecord2(value) {
     return typeof value === "object" && value !== null;
   }
@@ -627,6 +673,105 @@
     }
     return hardClipOutput(trimmedLines);
   }
+  function serializeTreeSnapshot(snapshot) {
+    return safeStringify(snapshot);
+  }
+  function trySerializeTreeSnapshot(snapshot) {
+    const serialized = serializeTreeSnapshot(snapshot);
+    if (fits(serialized)) {
+      return serialized;
+    }
+    return null;
+  }
+  function buildSnapshotPayload(roots, omittedMatches, markers) {
+    return {
+      roots,
+      omittedMatches,
+      markers
+    };
+  }
+  function getBudgetedTreeSnapshot(input) {
+    const stage0 = normalizeRoots(input);
+    let current = stage1ClipForest(stage0.roots).map((node) => stage2ClipValueOnNode(node));
+    const markers = [];
+    if (stage0.omittedMatches > 0) {
+      markers.push(`OMITTED_MATCHES:${stage0.omittedMatches}`);
+    }
+    let serialized = trySerializeTreeSnapshot(buildSnapshotPayload(current, stage0.omittedMatches, markers));
+    if (serialized !== null) {
+      return serialized;
+    }
+    current = current.map((node) => removeTextOnNode(node));
+    markers.push("STAGE3.1_REMOVE_TEXT");
+    serialized = trySerializeTreeSnapshot(buildSnapshotPayload(current, stage0.omittedMatches, markers));
+    if (serialized !== null) {
+      return serialized;
+    }
+    current = current.map((node) => removeKvValuesOnNode(node));
+    markers.push("STAGE3.2_REMOVE_KV_VALUE");
+    serialized = trySerializeTreeSnapshot(buildSnapshotPayload(current, stage0.omittedMatches, markers));
+    if (serialized !== null) {
+      return serialized;
+    }
+    current = current.map((node) => removeKvOnNode(node));
+    markers.push("STAGE3.3_REMOVE_KV");
+    serialized = trySerializeTreeSnapshot(buildSnapshotPayload(current, stage0.omittedMatches, markers));
+    if (serialized !== null) {
+      return serialized;
+    }
+    current = current.map((node) => removeOtherAndAriaOnNode(node));
+    markers.push("STAGE3.4_REMOVE_OTHER_ARIA");
+    serialized = trySerializeTreeSnapshot(buildSnapshotPayload(current, stage0.omittedMatches, markers));
+    if (serialized !== null) {
+      return serialized;
+    }
+    for (let depthCap = BUDGET.MAX_DEPTH;depthCap >= 1; depthCap -= 1) {
+      const depthFolded = current.map((node) => foldDepthOnNode(node, 0, depthCap));
+      const depthMarkers = [...markers, `STAGE3.5_DEPTH_CAP:${depthCap}`];
+      serialized = trySerializeTreeSnapshot(buildSnapshotPayload(depthFolded, stage0.omittedMatches, depthMarkers));
+      if (serialized !== null) {
+        return serialized;
+      }
+      current = depthFolded;
+    }
+    const firstRoot = current[0];
+    if (firstRoot !== undefined) {
+      current = [keepMinimalNode(firstRoot)];
+    }
+    markers.push("STAGE3.6_MINIMAL");
+    serialized = trySerializeTreeSnapshot(buildSnapshotPayload(current, stage0.omittedMatches, markers));
+    if (serialized !== null) {
+      return serialized;
+    }
+    const minimalMode = {
+      showText: false,
+      showKv: false,
+      kvKeysOnly: true,
+      minimal: true
+    };
+    const preview = convergeStringBudget(renderForest(current, minimalMode, stage0.omittedMatches));
+    const fallback = {
+      roots: [],
+      omittedMatches: stage0.omittedMatches,
+      markers: [...markers, "STAGE4_HARD_CLIP"],
+      preview
+    };
+    serialized = serializeTreeSnapshot(fallback);
+    if (fits(serialized)) {
+      return serialized;
+    }
+    const emergencyFallback = {
+      roots: [],
+      omittedMatches: stage0.omittedMatches,
+      markers: ["STAGE4_HARD_CLIP"],
+      preview: clipValue(preview)
+    };
+    serialized = serializeTreeSnapshot(emergencyFallback);
+    if (fits(serialized)) {
+      return serialized;
+    }
+    return convergeStringBudget(serialized);
+  }
 
   // src/dom.ts
   function toLowerTagName(element) {
@@ -766,7 +911,9 @@
     const domIR = createDomIR();
     const selected = findCallback === undefined ? domIR.root : findCallback(domIR);
     assertNodeOrNodes(selected);
-    return renderWithBudget(selected);
+    const output = renderWithBudget(selected);
+    recordBudgetRunStatsFromOutput("getDomTree", output);
+    return output;
   }
   function toNonNegativeFinite(value) {
     if (!Number.isFinite(value)) {
@@ -777,7 +924,26 @@
     }
     return value;
   }
-  function screenshotByXPath(htmlXPath) {
+  function resolveMatchStrategy(options) {
+    const value = options?.matchStrategy;
+    if (value === "deepest" || value === "first" || value === "all") {
+      return value;
+    }
+    return "all";
+  }
+  function resolveLimit(limit, fallback, cap) {
+    if (limit === undefined) {
+      return Math.min(fallback, cap);
+    }
+    if (!Number.isFinite(limit)) {
+      return Math.min(fallback, cap);
+    }
+    if (limit <= 0) {
+      return Math.min(fallback, cap);
+    }
+    return Math.min(Math.floor(limit), cap);
+  }
+  function collectElementsByXPath(htmlXPath) {
     const xpathResult = document.evaluate(htmlXPath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
     const matches = [];
     for (let index = 0;index < xpathResult.snapshotLength; index += 1) {
@@ -786,34 +952,174 @@
         matches.push(item);
       }
     }
-    const matched = matches.length;
-    const returned = Math.min(matched, BUDGET.MAX_SCREENSHOTS);
-    const omitted = matched - returned;
-    const items = matches.slice(0, returned).map((element) => {
-      const rect = element.getBoundingClientRect();
-      const width = Math.min(toNonNegativeFinite(rect.width), BUDGET.CLIP_MAX_WIDTH);
-      const height = Math.min(toNonNegativeFinite(rect.height), BUDGET.CLIP_MAX_HEIGHT);
-      const clipped = rect.width > BUDGET.CLIP_MAX_WIDTH || rect.height > BUDGET.CLIP_MAX_HEIGHT;
+    return matches;
+  }
+  function collectElementsByText(text) {
+    const needle = text.trim();
+    if (needle.length === 0) {
+      return [];
+    }
+    const out = [];
+    for (const element of Array.from(document.querySelectorAll("*"))) {
+      const content = element.textContent ?? "";
+      if (content.includes(needle)) {
+        out.push(element);
+      }
+    }
+    return out;
+  }
+  function filterDeepestElements(elements) {
+    if (elements.length <= 1) {
+      return elements;
+    }
+    const kept = [];
+    for (const candidate of elements) {
+      let isAncestor = false;
+      for (const other of elements) {
+        if (candidate !== other && candidate.contains(other)) {
+          isAncestor = true;
+          break;
+        }
+      }
+      if (!isAncestor) {
+        kept.push(candidate);
+      }
+    }
+    return kept;
+  }
+  function applyMatchStrategy(elements, options) {
+    const strategy = resolveMatchStrategy(options);
+    const excludeAncestors = options?.excludeAncestors === true;
+    let selected = elements;
+    if (strategy === "deepest" || excludeAncestors) {
+      selected = filterDeepestElements(selected);
+    }
+    if (strategy === "first") {
+      const first = selected[0];
+      if (first === undefined) {
+        return [];
+      }
+      return [first];
+    }
+    return selected;
+  }
+  function getRawRect(element) {
+    const rect = element.getBoundingClientRect();
+    return {
+      x: toNonNegativeFinite(rect.left + window.scrollX),
+      y: toNonNegativeFinite(rect.top + window.scrollY),
+      width: toNonNegativeFinite(rect.width),
+      height: toNonNegativeFinite(rect.height)
+    };
+  }
+  function getClippedRect(rawRect) {
+    return {
+      x: rawRect.x,
+      y: rawRect.y,
+      width: Math.min(rawRect.width, BUDGET.CLIP_MAX_WIDTH),
+      height: Math.min(rawRect.height, BUDGET.CLIP_MAX_HEIGHT)
+    };
+  }
+  function getVisibility(element) {
+    const style = window.getComputedStyle(element);
+    const opacityValue = Number.parseFloat(style.opacity);
+    const hasOpacity = style.opacity.trim().length > 0 && Number.isFinite(opacityValue);
+    if (style.display === "none" || style.visibility === "hidden" || hasOpacity && opacityValue === 0) {
+      return "hidden";
+    }
+    return "visible";
+  }
+  function isInViewport(rawRect) {
+    const viewportLeft = window.scrollX;
+    const viewportTop = window.scrollY;
+    const viewportRight = viewportLeft + window.innerWidth;
+    const viewportBottom = viewportTop + window.innerHeight;
+    const rectRight = rawRect.x + rawRect.width;
+    const rectBottom = rawRect.y + rawRect.height;
+    return rawRect.width > 0 && rawRect.height > 0 && rectRight > viewportLeft && rawRect.x < viewportRight && rectBottom > viewportTop && rawRect.y < viewportBottom;
+  }
+  function buildRectItems(elements) {
+    return elements.map((element, index) => {
+      const rawRect = getRawRect(element);
       return {
         xpath: getElementXPath(element),
-        clip: {
-          x: toNonNegativeFinite(rect.left + window.scrollX),
-          y: toNonNegativeFinite(rect.top + window.scrollY),
-          width,
-          height
-        },
+        resolvedXPath: getElementXPath(element),
+        matchIndex: index,
+        rawRect,
+        visibility: getVisibility(element),
+        inViewport: isInViewport(rawRect),
+        devicePixelRatio: toNonNegativeFinite(window.devicePixelRatio || 1)
+      };
+    });
+  }
+  function finalizeRectPlan(api, matched, resolved, selected, limit, matchStrategy) {
+    const returnedElements = selected.slice(0, limit);
+    const items = buildRectItems(returnedElements);
+    const returned = items.length;
+    const omitted = Math.max(0, resolved - returned);
+    const plan = {
+      matched,
+      resolved,
+      returned,
+      omitted,
+      matchStrategy,
+      items
+    };
+    recordBudgetRunStatsFromFlags(api, {
+      charCount: safeStringify(plan).length,
+      truncated: false,
+      omitted: omitted > 0
+    });
+    return plan;
+  }
+  function getRectsByXPath(htmlXPath, options) {
+    const matchedElements = collectElementsByXPath(htmlXPath);
+    const selectedElements = applyMatchStrategy(matchedElements, options);
+    const limit = resolveLimit(options?.limit, BUDGET.MAX_NODES, BUDGET.MAX_NODES);
+    return finalizeRectPlan("getRectsByXPath", matchedElements.length, selectedElements.length, selectedElements, limit, resolveMatchStrategy(options));
+  }
+  function getRectsByText(text, options) {
+    const matchedElements = collectElementsByText(text);
+    const selectedElements = applyMatchStrategy(matchedElements, options);
+    const limit = resolveLimit(options?.limit, BUDGET.MAX_NODES, BUDGET.MAX_NODES);
+    return finalizeRectPlan("getRectsByText", matchedElements.length, selectedElements.length, selectedElements, limit, resolveMatchStrategy(options));
+  }
+  function screenshotByXPath(htmlXPath, options) {
+    const rectPlan = getRectsByXPath(htmlXPath, {
+      ...options,
+      limit: resolveLimit(options?.limit, BUDGET.MAX_SCREENSHOTS, BUDGET.MAX_SCREENSHOTS)
+    });
+    const items = rectPlan.items.map((item) => {
+      const clippedRect = getClippedRect(item.rawRect);
+      const clipped = clippedRect.width < item.rawRect.width || clippedRect.height < item.rawRect.height;
+      return {
+        xpath: item.xpath,
+        resolvedXPath: item.resolvedXPath,
+        matchIndex: item.matchIndex,
+        rawRect: item.rawRect,
+        clippedRect,
+        devicePixelRatio: item.devicePixelRatio,
+        clip: clippedRect,
         clipped
       };
     });
-    return {
-      matched,
-      returned,
-      omitted,
+    const output = {
+      matched: rectPlan.matched,
+      resolved: rectPlan.resolved,
+      returned: rectPlan.returned,
+      omitted: rectPlan.omitted,
       maxScreenshots: BUDGET.MAX_SCREENSHOTS,
       clipMaxWidth: BUDGET.CLIP_MAX_WIDTH,
       clipMaxHeight: BUDGET.CLIP_MAX_HEIGHT,
+      matchStrategy: rectPlan.matchStrategy,
       items
     };
+    recordBudgetRunStatsFromFlags("screenshotByXPath", {
+      charCount: safeStringify(output).length,
+      truncated: items.some((item) => item.clipped),
+      omitted: output.omitted > 0
+    });
+    return output;
   }
 
   // src/react.ts
@@ -1285,11 +1591,158 @@
       findOne: (criteria) => findOneReactNode(roots, criteria)
     };
   }
+  function countNodeTree(nodes) {
+    let count = 0;
+    const stack = [];
+    for (const node of nodes) {
+      stack.push(node);
+    }
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current === undefined) {
+        continue;
+      }
+      count += 1;
+      if (Array.isArray(current.children)) {
+        for (const child of current.children) {
+          if (isRecord3(child)) {
+            stack.push(child);
+          }
+        }
+      }
+    }
+    return count;
+  }
+  function countJsonEntries(value) {
+    if (value === null || value === undefined) {
+      return 0;
+    }
+    if (typeof value !== "object") {
+      return 1;
+    }
+    if (Array.isArray(value)) {
+      let count2 = 1;
+      for (const item of value) {
+        count2 += countJsonEntries(item);
+      }
+      return count2;
+    }
+    let count = 1;
+    for (const item of Object.values(value)) {
+      count += countJsonEntries(item);
+    }
+    return count;
+  }
+  function serializeJsonEnvelope(data, meta) {
+    const first = safeStringify({
+      data,
+      meta: {
+        ...meta,
+        charCount: 0
+      }
+    });
+    const parsed = JSON.parse(first);
+    const withCharCount = {
+      data: parsed.data,
+      meta: {
+        ...parsed.meta,
+        charCount: first.length
+      }
+    };
+    return safeStringify(withCharCount);
+  }
+  function toTruncatedFlag(markers, preview) {
+    if (preview !== undefined) {
+      return true;
+    }
+    return markers.some((marker) => marker.includes("STAGE") || marker.includes("HARD_CLIP"));
+  }
+  function toOmittedFlag(markers, omittedMatches) {
+    if (omittedMatches > 0) {
+      return true;
+    }
+    if (markers.some((marker) => marker.includes("OMITTED"))) {
+      return true;
+    }
+    return markers.some((marker) => marker.includes("STAGE3") || marker.includes("STAGE4"));
+  }
   function getReactTree(findCallback) {
     const reactIR = createReactIR();
     const selected = findCallback === undefined ? reactIR.roots : findCallback(reactIR);
     assertNodeOrNodes(selected);
-    return renderWithBudget(selected);
+    const output = renderWithBudget(selected);
+    recordBudgetRunStatsFromOutput("getReactTree", output);
+    return output;
+  }
+  function getReactTreeJson(findCallback) {
+    const reactIR = createReactIR();
+    const selected = findCallback === undefined ? reactIR.roots : findCallback(reactIR);
+    assertNodeOrNodes(selected);
+    const snapshot = JSON.parse(getBudgetedTreeSnapshot(selected));
+    const nodeCount = countNodeTree(snapshot.roots);
+    const budget = getBudgetInfo();
+    const fullMeta = {
+      truncated: toTruncatedFlag(snapshot.markers, snapshot.preview),
+      omitted: toOmittedFlag(snapshot.markers, snapshot.omittedMatches),
+      omittedMatches: snapshot.omittedMatches,
+      nodeCount,
+      markers: snapshot.markers,
+      budget
+    };
+    const payloadCandidates = [
+      {
+        data: snapshot.roots,
+        meta: fullMeta
+      },
+      {
+        data: snapshot.roots,
+        meta: {
+          truncated: fullMeta.truncated,
+          omitted: fullMeta.omitted,
+          omittedMatches: snapshot.omittedMatches,
+          nodeCount,
+          budget
+        }
+      },
+      {
+        data: snapshot.roots.slice(0, 1),
+        meta: {
+          truncated: true,
+          omitted: true,
+          omittedMatches: snapshot.omittedMatches,
+          nodeCount: countNodeTree(snapshot.roots.slice(0, 1)),
+          budget
+        }
+      },
+      {
+        data: {
+          preview: clipValue(snapshot.preview ?? renderWithBudget(selected))
+        },
+        meta: {
+          truncated: true,
+          omitted: true,
+          omittedMatches: snapshot.omittedMatches,
+          nodeCount: 1,
+          budget
+        }
+      }
+    ];
+    for (const candidate of payloadCandidates) {
+      const serialized = serializeJsonEnvelope(candidate.data, candidate.meta);
+      if (fits(serialized)) {
+        recordBudgetRunStatsFromOutput("getReactTreeJson", serialized);
+        return serialized;
+      }
+    }
+    const emergency = serializeJsonEnvelope({ preview: clipValue(renderWithBudget(selected)) }, {
+      truncated: true,
+      omitted: true,
+      omittedMatches: snapshot.omittedMatches,
+      nodeCount: 1,
+      budget
+    });
+    recordBudgetRunStatsFromOutput("getReactTreeJson", emergency);
+    return emergency;
   }
   function readDomFragment(node) {
     if (node instanceof Element) {
@@ -1312,6 +1765,7 @@
     const fiber = findFiberByPath(reactPath);
     const hostNodes = collectHostDomNodesFromFiber(fiber, BUDGET.MAX_NODES * 4);
     if (hostNodes.length === 0) {
+      recordBudgetRunStatsFromOutput("getReactRenderedHtml", "");
       return "";
     }
     let omitted = 0;
@@ -1327,7 +1781,9 @@
       output = `${output}
 …(OMITTED_MATCHES, omitted=${omitted})`;
     }
-    return convergeStringBudget(output);
+    const converged = convergeStringBudget(output);
+    recordBudgetRunStatsFromOutput("getReactRenderedHtml", converged);
+    return converged;
   }
   function collectHooksFromMemoizedState(memoizedState) {
     const hooks = [];
@@ -1379,16 +1835,107 @@
     const full = extractStateAndHooks(fiber, reactPath);
     const transformed = transform === undefined ? full : transform(full);
     const serialized = safeStringify(transformed);
-    return convergeStringBudget(serialized);
+    const converged = convergeStringBudget(serialized);
+    recordBudgetRunStatsFromOutput("getReactStateAndHooks", converged);
+    return converged;
+  }
+  function getReactStateAndHooksJson(reactPath, transform) {
+    const fiber = findFiberByPath(reactPath);
+    const full = extractStateAndHooks(fiber, reactPath);
+    const transformed = transform === undefined ? full : transform(full);
+    const safeDataText = safeStringify(transformed);
+    const parsedData = JSON.parse(safeDataText);
+    const budget = getBudgetInfo();
+    const firstCandidate = serializeJsonEnvelope(parsedData, {
+      truncated: false,
+      omitted: false,
+      nodeCount: countJsonEntries(parsedData),
+      budget
+    });
+    if (fits(firstCandidate)) {
+      recordBudgetRunStatsFromOutput("getReactStateAndHooksJson", firstCandidate);
+      return firstCandidate;
+    }
+    const clipped = convergeStringBudget(safeDataText);
+    const secondCandidate = serializeJsonEnvelope({
+      preview: clipValue(clipped)
+    }, {
+      truncated: true,
+      omitted: true,
+      nodeCount: 1,
+      budget
+    });
+    recordBudgetRunStatsFromOutput("getReactStateAndHooksJson", secondCandidate);
+    return secondCandidate;
+  }
+  function toRectNumber(value) {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    if (value < 0) {
+      return 0;
+    }
+    return value;
+  }
+  function getElementVisibility(element) {
+    const style = window.getComputedStyle(element);
+    const opacityValue = Number.parseFloat(style.opacity);
+    const hasOpacity = style.opacity.trim().length > 0 && Number.isFinite(opacityValue);
+    if (style.display === "none" || style.visibility === "hidden" || hasOpacity && opacityValue === 0) {
+      return "hidden";
+    }
+    return "visible";
+  }
+  function getInViewport(rawRect) {
+    const viewportLeft = window.scrollX;
+    const viewportTop = window.scrollY;
+    const viewportRight = viewportLeft + window.innerWidth;
+    const viewportBottom = viewportTop + window.innerHeight;
+    const right = rawRect.x + rawRect.width;
+    const bottom = rawRect.y + rawRect.height;
+    return rawRect.width > 0 && rawRect.height > 0 && right > viewportLeft && rawRect.x < viewportRight && bottom > viewportTop && rawRect.y < viewportBottom;
+  }
+  function getRectByReactPath(reactPath) {
+    const fiber = findFiberByPath(reactPath);
+    const hostNodes = collectHostDomNodesFromFiber(fiber, BUDGET.MAX_NODES);
+    const firstElement = hostNodes.find((entry) => entry instanceof Element);
+    if (!(firstElement instanceof Element)) {
+      recordBudgetRunStatsFromOutput("getRectByReactPath", "null");
+      return null;
+    }
+    const rect = firstElement.getBoundingClientRect();
+    const rawRect = {
+      x: toRectNumber(rect.left + window.scrollX),
+      y: toRectNumber(rect.top + window.scrollY),
+      width: toRectNumber(rect.width),
+      height: toRectNumber(rect.height)
+    };
+    const item = {
+      xpath: getNodeXPath(firstElement),
+      resolvedXPath: getNodeXPath(firstElement),
+      matchIndex: 0,
+      rawRect,
+      visibility: getElementVisibility(firstElement),
+      inViewport: getInViewport(rawRect),
+      devicePixelRatio: toRectNumber(window.devicePixelRatio || 1)
+    };
+    recordBudgetRunStatsFromOutput("getRectByReactPath", safeStringify(item));
+    return item;
   }
 
   // src/index.ts
   var ReactProbe = {
     getDomTree,
     getReactTree,
+    getReactTreeJson,
     getReactRenderedHtml,
     getReactStateAndHooks,
-    screenshotByXPath
+    getReactStateAndHooksJson,
+    screenshotByXPath,
+    getRectsByXPath,
+    getRectsByText,
+    getRectByReactPath,
+    getBudgetInfo
   };
   globalThis.ReactProbe = ReactProbe;
 })();

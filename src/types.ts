@@ -89,14 +89,71 @@ export type ReactIR = {
 
 export type ScreenshotPlan = {
   matched: number;
+  resolved: number;
   returned: number;
   omitted: number;
   maxScreenshots: number;
   clipMaxWidth: number;
   clipMaxHeight: number;
+  matchStrategy: "deepest" | "first" | "all";
   items: Array<{
     xpath: string;
+    resolvedXPath: string;
+    matchIndex: number;
+    rawRect: { x: number; y: number; width: number; height: number };
+    clippedRect: { x: number; y: number; width: number; height: number };
+    devicePixelRatio: number;
     clip: { x: number; y: number; width: number; height: number };
     clipped: boolean;
   }>;
+};
+
+export type MatchStrategy = "deepest" | "first" | "all";
+
+export type MatchOptions = {
+  matchStrategy?: MatchStrategy;
+  excludeAncestors?: boolean;
+  limit?: number;
+};
+
+export type RectItem = {
+  xpath: string;
+  resolvedXPath: string;
+  matchIndex: number;
+  rawRect: { x: number; y: number; width: number; height: number };
+  visibility: "visible" | "hidden";
+  inViewport: boolean;
+  devicePixelRatio: number;
+};
+
+export type RectPlan = {
+  matched: number;
+  resolved: number;
+  returned: number;
+  omitted: number;
+  matchStrategy: MatchStrategy;
+  items: RectItem[];
+};
+
+export type BudgetLastRunStats = {
+  api: string;
+  charCount: number;
+  truncated: boolean;
+  omitted: boolean;
+  timestamp: string;
+};
+
+export type BudgetInfo = {
+  budget: {
+    MAX_CHARS: number;
+    VALUE_MAX_CHARS: number;
+    MAX_NODES: number;
+    MAX_SCREENSHOTS: number;
+    CLIP_MAX_WIDTH: number;
+    CLIP_MAX_HEIGHT: number;
+    MAX_DEPTH: number;
+  };
+  source: "default" | "override";
+  effectiveAt: string;
+  lastRunStats: BudgetLastRunStats | null;
 };

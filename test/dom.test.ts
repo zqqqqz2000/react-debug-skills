@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUDGET } from "../src/budget";
-import { getDomTree, screenshotByXPath } from "../src/dom";
+import { getDomTree, getRectsByText, getRectsByXPath, screenshotByXPath } from "../src/dom";
 import { installDom, uninstallDom } from "./helpers";
 
 function createRect(width: number, height: number, left = 0, top = 0): DOMRect {
@@ -85,5 +85,61 @@ describe("dom probe", () => {
     expect(plan.items[0]?.clipped).toBe(true);
     expect(plan.items[0]?.clip.width).toBe(BUDGET.CLIP_MAX_WIDTH);
     expect(plan.items[0]?.clip.height).toBe(BUDGET.CLIP_MAX_HEIGHT);
+    expect(plan.items[0]?.rawRect.width).toBe(1200);
+    expect(plan.items[0]?.clippedRect.width).toBe(BUDGET.CLIP_MAX_WIDTH);
+    expect(plan.items[0]?.devicePixelRatio).toBeGreaterThan(0);
+  });
+
+  test("screenshotByXPath supports deepest and first match strategy", () => {
+    uninstallDom(dom);
+    dom = installDom(
+      "<!doctype html><html><body><section id='outer'><div id='inner'><span id='leaf'>leaf</span></div></section></body></html>"
+    );
+
+    const deepestPlan = screenshotByXPath("//*[@id='outer' or @id='inner' or @id='leaf']", {
+      matchStrategy: "deepest"
+    });
+    expect(deepestPlan.matched).toBe(3);
+    expect(deepestPlan.resolved).toBe(1);
+    expect(deepestPlan.returned).toBe(1);
+    expect(deepestPlan.items[0]?.resolvedXPath).toContain("/span[1]");
+
+    const firstPlan = screenshotByXPath("//*[@id='outer' or @id='inner' or @id='leaf']", {
+      matchStrategy: "first"
+    });
+    expect(firstPlan.matched).toBe(3);
+    expect(firstPlan.resolved).toBe(1);
+    expect(firstPlan.returned).toBe(1);
+  });
+
+  test("getRectsByXPath applies excludeAncestors and limit", () => {
+    uninstallDom(dom);
+    dom = installDom(
+      "<!doctype html><html><body><main><section id='a'><div id='b'><span id='c'>x</span></div></section></main></body></html>"
+    );
+
+    const rectPlan = getRectsByXPath("//*[@id='a' or @id='b' or @id='c']", {
+      excludeAncestors: true,
+      limit: 1
+    });
+    expect(rectPlan.matched).toBe(3);
+    expect(rectPlan.resolved).toBe(1);
+    expect(rectPlan.returned).toBe(1);
+    expect(rectPlan.omitted).toBe(0);
+  });
+
+  test("getRectsByText returns visible/inViewport rect items", () => {
+    uninstallDom(dom);
+    dom = installDom(
+      "<!doctype html><html><body><p>alpha needle beta</p><p style='display:none'>needle hidden</p></body></html>"
+    );
+
+    const plan = getRectsByText("needle", {
+      matchStrategy: "all"
+    });
+    expect(plan.matched).toBeGreaterThanOrEqual(2);
+    expect(plan.returned).toBeGreaterThanOrEqual(1);
+    expect(plan.items[0]?.visibility).toBe("visible");
+    expect(typeof plan.items[0]?.inViewport).toBe("boolean");
   });
 });

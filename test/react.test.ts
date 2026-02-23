@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { BUDGET } from "../src/budget";
+import { BUDGET, getBudgetInfo } from "../src/budget";
 import {
   createReactIR,
   findNearestFiberForDomNode,
+  getRectByReactPath,
   getReactRenderedHtml,
   getReactStateAndHooks,
+  getReactStateAndHooksJson,
   getReactTree,
+  getReactTreeJson,
   mapDomNodeToDisplayFiber
 } from "../src/react";
 import type { FiberNodeLike } from "../src/types";
@@ -233,5 +236,208 @@ describe("react probe", () => {
     expect(out.length).toBeLessThanOrEqual(BUDGET.MAX_CHARS);
     expect(out).toContain("TRUNCATED,len=");
     expect(out.includes("OMITTED_SUBTREE") || out.includes("OMITTED_LINES")).toBe(true);
+  });
+
+  test("getReactTreeJson returns structured data and meta within budget", () => {
+    const hostElement = document.createElement("div");
+    document.body.appendChild(hostElement);
+    const { rootFiber } = createMockTreeWithHook(hostElement);
+
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    const json = getReactTreeJson();
+    expect(json.length).toBeLessThanOrEqual(BUDGET.MAX_CHARS);
+
+    const parsed = JSON.parse(json) as {
+      data: Array<{ reactPath?: string }>;
+      meta: { truncated: boolean; omitted: boolean; nodeCount: number; charCount: number };
+    };
+    expect(Array.isArray(parsed.data)).toBe(true);
+    expect(parsed.meta.nodeCount).toBeGreaterThan(0);
+    expect(parsed.meta.charCount).toBeGreaterThan(0);
+  });
+
+  test("getReactTreeJson falls back to preview payload when data is huge", () => {
+    const hostElement = document.createElement("div");
+    document.body.appendChild(hostElement);
+    const { rootFiber } = createMockTreeWithHook(hostElement);
+
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    const json = getReactTreeJson(() => ({
+      id: "(@reactPath=/Huge[0])",
+      label: "Huge",
+      displayName: "Huge",
+      reactPath: "/Huge[0]",
+      fiber: rootFiber,
+      domXPaths: [],
+      children: Array.from({ length: BUDGET.MAX_NODES + 150 }, (_unused, index) => ({
+        id: `(@reactPath=/Huge[0]/Node[${index}])`,
+        label: `Node-${"x".repeat(80)}-${index}`,
+        displayName: `Node-${index}`,
+        reactPath: `/Huge[0]/Node[${index}]`,
+        fiber: rootFiber,
+        domXPaths: [],
+        kv: [{ k: "k", v: "v".repeat(200) }]
+      }))
+    }));
+
+    const parsed = JSON.parse(json) as {
+      data: unknown;
+      meta: { truncated: boolean; omitted: boolean };
+    };
+    expect(parsed.meta.truncated).toBe(true);
+    expect(parsed.meta.omitted).toBe(true);
+    expect(json.length).toBeLessThanOrEqual(BUDGET.MAX_CHARS);
+  });
+
+  test("getReactStateAndHooksJson returns structured JSON data", () => {
+    function WithHooksJson(): null {
+      return null;
+    }
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+
+    const hookNode: Record<string, unknown> = {
+      memoizedState: { value: "ok" },
+      baseState: null,
+      queue: null,
+      baseQueue: null,
+      next: null
+    };
+    const rootFiber: FiberNodeLike = { tag: 3 };
+    const compFiber: FiberNodeLike = {
+      tag: 0,
+      type: WithHooksJson,
+      return: rootFiber,
+      memoizedState: hookNode,
+      memoizedProps: { mode: "json" }
+    };
+    const hostFiber: FiberNodeLike = { tag: 5, type: "div", stateNode: host, return: compFiber };
+    rootFiber.child = compFiber;
+    compFiber.child = hostFiber;
+
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    const out = getReactStateAndHooksJson("/Root[0]/WithHooksJson[0]", (full) => full);
+    const parsed = JSON.parse(out) as {
+      data: Record<string, unknown>;
+      meta: { truncated: boolean; charCount: number; nodeCount: number };
+    };
+
+    expect(parsed.meta.charCount).toBeGreaterThan(0);
+    expect(parsed.meta.truncated).toBe(false);
+    expect(parsed.meta.nodeCount).toBeGreaterThan(1);
+    expect(parsed.data.displayName).toBe("WithHooksJson");
+  });
+
+  test("getReactStateAndHooksJson truncates into preview for oversized payload", () => {
+    function BigHooks(): null {
+      return null;
+    }
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const rootFiber: FiberNodeLike = { tag: 3 };
+    const compFiber: FiberNodeLike = {
+      tag: 0,
+      type: BigHooks,
+      return: rootFiber,
+      memoizedProps: { huge: "x".repeat(BUDGET.MAX_CHARS * 2) },
+      memoizedState: null
+    };
+    const hostFiber: FiberNodeLike = { tag: 5, type: "div", stateNode: host, return: compFiber };
+    rootFiber.child = compFiber;
+    compFiber.child = hostFiber;
+
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    const out = getReactStateAndHooksJson("/Root[0]/BigHooks[0]", () => ({
+      huge: "Y".repeat(BUDGET.MAX_CHARS * 3)
+    }));
+    const parsed = JSON.parse(out) as {
+      data: { preview?: string };
+      meta: { truncated: boolean; omitted: boolean };
+    };
+    expect(parsed.meta.truncated).toBe(true);
+    expect(parsed.meta.omitted).toBe(true);
+    expect(typeof parsed.data.preview).toBe("string");
+    expect(out.length).toBeLessThanOrEqual(BUDGET.MAX_CHARS);
+  });
+
+  test("getRectByReactPath returns first host element rect metadata", () => {
+    const hostElement = document.createElement("div");
+    hostElement.style.width = "100px";
+    hostElement.style.height = "50px";
+    document.body.appendChild(hostElement);
+    const { rootFiber } = createMockTreeWithHook(hostElement);
+
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    const rect = getRectByReactPath("/Root[0]/App[0]");
+    expect(rect).not.toBeNull();
+    expect(rect?.rawRect.width).toBeGreaterThanOrEqual(0);
+    expect(rect?.resolvedXPath).toContain("/html[1]");
+  });
+
+  test("getRectByReactPath returns null when no host element exists", () => {
+    function EmptyHost(): null {
+      return null;
+    }
+
+    const rootFiber: FiberNodeLike = { tag: 3 };
+    const compFiber: FiberNodeLike = {
+      tag: 0,
+      type: EmptyHost,
+      return: rootFiber,
+      memoizedState: null,
+      memoizedProps: {}
+    };
+    rootFiber.child = compFiber;
+
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    const rect = getRectByReactPath("/Root[0]/EmptyHost[0]");
+    expect(rect).toBeNull();
+  });
+
+  test("getBudgetInfo exposes source/effectiveAt and tracks last run stats", () => {
+    const before = getBudgetInfo();
+    expect(before.budget.MAX_CHARS).toBe(BUDGET.MAX_CHARS);
+    expect(before.source === "default" || before.source === "override").toBe(true);
+    expect(typeof before.effectiveAt).toBe("string");
+
+    const hostElement = document.createElement("div");
+    document.body.appendChild(hostElement);
+    const { rootFiber } = createMockTreeWithHook(hostElement);
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map<number, unknown>([[1, {}]]),
+      getFiberRoots: () => new Set([{ current: rootFiber }])
+    };
+
+    getReactTree();
+    const after = getBudgetInfo();
+    expect(after.lastRunStats).not.toBeNull();
+    expect(after.lastRunStats?.api).toBe("getReactTree");
+    expect(after.lastRunStats?.charCount).toBeGreaterThan(0);
   });
 });

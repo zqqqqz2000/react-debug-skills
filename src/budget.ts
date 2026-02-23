@@ -1,4 +1,4 @@
-import type { NodeKV, OmittedReason, ProbeNode } from "./types";
+import type { BudgetInfo, BudgetLastRunStats, NodeKV, OmittedReason, ProbeNode } from "./types";
 import { safeStringify } from "./safeStringify";
 
 type ProbeBudgetOverride = Partial<{
@@ -46,6 +46,10 @@ function readBudgetOverride(): ProbeBudgetOverride {
 }
 
 const budgetOverride = readBudgetOverride();
+const BUDGET_SOURCE = Object.keys(budgetOverride).length > 0 ? "override" : "default";
+const BUDGET_EFFECTIVE_AT = new Date().toISOString();
+
+let lastRunStats: BudgetLastRunStats | null = null;
 
 export const BUDGET = {
   MAX_CHARS: pickBudgetNumber(budgetOverride.MAX_CHARS, MAX_CHARS),
@@ -56,6 +60,50 @@ export const BUDGET = {
   CLIP_MAX_HEIGHT: pickBudgetNumber(budgetOverride.CLIP_MAX_HEIGHT, CLIP_MAX_HEIGHT),
   MAX_DEPTH: pickBudgetNumber(budgetOverride.MAX_DEPTH, MAX_DEPTH)
 } as const;
+
+function updateLastRunStats(stats: BudgetLastRunStats): void {
+  lastRunStats = stats;
+}
+
+export function recordBudgetRunStatsFromOutput(api: string, output: string): void {
+  updateLastRunStats({
+    api,
+    charCount: len(output),
+    truncated: output.includes("TRUNCATED"),
+    omitted: output.includes("OMITTED_"),
+    timestamp: new Date().toISOString()
+  });
+}
+
+export function recordBudgetRunStatsFromFlags(
+  api: string,
+  flags: { charCount: number; truncated: boolean; omitted: boolean }
+): void {
+  updateLastRunStats({
+    api,
+    charCount: flags.charCount,
+    truncated: flags.truncated,
+    omitted: flags.omitted,
+    timestamp: new Date().toISOString()
+  });
+}
+
+export function getBudgetInfo(): BudgetInfo {
+  return {
+    budget: {
+      MAX_CHARS: BUDGET.MAX_CHARS,
+      VALUE_MAX_CHARS: BUDGET.VALUE_MAX_CHARS,
+      MAX_NODES: BUDGET.MAX_NODES,
+      MAX_SCREENSHOTS: BUDGET.MAX_SCREENSHOTS,
+      CLIP_MAX_WIDTH: BUDGET.CLIP_MAX_WIDTH,
+      CLIP_MAX_HEIGHT: BUDGET.CLIP_MAX_HEIGHT,
+      MAX_DEPTH: BUDGET.MAX_DEPTH
+    },
+    source: BUDGET_SOURCE,
+    effectiveAt: BUDGET_EFFECTIVE_AT,
+    lastRunStats
+  };
+}
 
 type RenderMode = {
   showText: boolean;
