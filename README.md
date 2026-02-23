@@ -43,7 +43,40 @@ globalThis.ReactProbe = {
 };
 ```
 
-## 2. 安装与构建
+## 2. Skill 安装与使用
+
+标准 Skill 目录已提供：`skills/react-probe/SKILL.md`
+
+### 2.1 本地安装到 Codex
+
+```bash
+SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/react-probe"
+mkdir -p "$SKILL_HOME"
+cp -R skills/react-probe/* "$SKILL_HOME/"
+```
+
+安装后重启 Codex 生效。
+
+### 2.2 从 GitHub 仓库安装（repo/path）
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
+  --repo <owner>/<repo> \
+  --path skills/react-probe
+```
+
+安装后重启 Codex 生效。
+
+### 2.3 Skill 的作用
+
+`react-probe` skill 用于指导 Codex 在调试任务里：
+
+- 构建并注入 `dist/probe.scale.js`
+- 用 `getReactTree` 定位组件并提取 `reactPath`
+- 用 `getReactStateAndHooks` / `getReactRenderedHtml` 读取组件行为
+- 在有限上下文下依赖 Stage 0..4 降级策略稳定输出
+
+## 3. 安装依赖与构建 Probe
 
 ```bash
 bun install
@@ -54,9 +87,9 @@ bun run build
 
 构建输出：`dist/probe.scale.js`
 
-## 3. 注入方式
+## 4. 注入方式
 
-### 3.1 Playwright
+### 4.1 Playwright
 
 ```ts
 import { readFileSync } from "node:fs";
@@ -74,7 +107,7 @@ const tree = await page.evaluate(() => globalThis.ReactProbe.getReactTree());
 await page.evaluate(script);
 ```
 
-### 3.2 Chrome CDP
+### 4.2 Chrome CDP
 
 ```ts
 const script = fs.readFileSync("dist/probe.scale.js", "utf8");
@@ -87,7 +120,7 @@ const result = await cdp.send("Runtime.evaluate", {
 });
 ```
 
-## 4. `reactPath` 规则（重点）
+## 5. `reactPath` 规则（重点）
 
 `getReactRenderedHtml` / `getReactStateAndHooks` 的参数是 `reactPath`，不是 W3C HTML XPath。
 
@@ -106,20 +139,6 @@ const result = await cdp.send("Runtime.evaluate", {
 1. `getReactTree((react) => react.query(...))` 先筛选组件
 2. 从返回文本中提取 `(@reactPath=...)`
 3. 将该 path 传给 `getReactStateAndHooks` / `getReactRenderedHtml`
-
-## 5. Skill 文档怎么用
-
-本仓库包含 `skill.md`，用于说明该 probe 在 LLM 调试链路中的注入与调用规范。
-
-建议阅读顺序：
-
-1. `skill.md`：注入方式、API 行为、预算与截断约束
-2. 本 README：工程落地、测试方式、分发方式
-
-典型用途：
-
-- 在 Playwright/CDP 的自动化调试中，把页面状态转成稳定字符串输出给 LLM
-- 在上下文预算有限时，通过统一降级策略避免输出撑爆上下文
 
 ## 6. 预算与降级（内部 const，不通过函数参数暴露）
 
@@ -161,11 +180,11 @@ bun run test
   - callback 输出预算收敛与 fallback 标记
   - screenshot 计划裁剪上限
 
-## 8. 能否发布到 Codex Skill 市场？
+## 8. Skill 市场分发说明
 
-截至 **2026-02-23**，从当前本地工具链看，没有“在本仓库一键发布到官方市场”的直接入口；可行路径通常是：
+截至 **2026-02-23**，当前本地链路没有“从这个仓库一键发布官方 Codex 市场”的直接按钮。
 
-1. 仓库分发：把 skill 结构化后放到 GitHub，供他人通过 skill installer 按 repo/path 安装。
-2. 官方收录：向 `openai/skills` 的 `.curated` 或 `.experimental` 提交 PR，等待维护者审核与收录。
+可行路径：
 
-如果你要做“可安装 skill”分发，建议下一步把当前 `skill.md` 改成标准目录形态（例如 `skills/react-probe/SKILL.md`），并补最小示例资产，便于 installer 直接安装。
+1. 仓库分发：按 `skills/react-probe` 目录发布到 GitHub，供他人通过 repo/path 安装。
+2. 官方收录：向 `openai/skills` 的 `.curated` 或 `.experimental` 提 PR，等待审核。

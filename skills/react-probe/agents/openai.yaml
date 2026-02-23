@@ -1,0 +1,4 @@
+interface:
+  display_name: "React Probe"
+  short_description: "Inject bounded React/DOM probe for MCP debug"
+  default_prompt: "Use $react-probe to inject dist/probe.scale.js, locate target components, and inspect bounded tree/state/html output."
