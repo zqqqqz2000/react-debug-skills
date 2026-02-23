@@ -1,14 +1,14 @@
 ---
 name: react-probe
-description: "Inject and operate ReactProbe in Playwright/Chrome CDP/MCP browser debugging sessions. Use when you need bounded DOM and React tree output, reactPath-based component lookup, rendered HTML extraction, state/hooks extraction, and XPath screenshot plans without overflowing LLM context."
+description: "Operate ReactProbe in Playwright/Chrome CDP/MCP debugging sessions for React-focused inspection: component lookup, reactPath navigation, state/hooks extraction, props visibility, and rendered HTML retrieval with bounded output."
 ---
 
 # React Probe
 
-## Build and Inject
+## Runtime Entry
 
-1. Run `bun install && bun run lint && bun run test && bun run build` in the project root.
-2. Load `dist/probe.scale.js` into the page via Playwright `addInitScript` or CDP `Runtime.evaluate`.
+1. Use the prebuilt `dist/probe.scale.js` from this repository.
+2. Load it into the target page via Playwright `addInitScript` or CDP `Runtime.evaluate`.
 3. Ensure `globalThis.ReactProbe` exists before calling APIs.
 
 ## Public APIs
@@ -21,13 +21,14 @@ description: "Inject and operate ReactProbe in Playwright/Chrome CDP/MCP browser
 - `getReactStateAndHooks(reactPath, transform?) => string`
 - `screenshotByXPath(htmlXPath) => ScreenshotPlan`
 
-## Recommended Debug Flow
+## React Debug Flow
 
 1. Use `getReactTree((react) => react.query(criteria))` to locate candidates.
 2. Extract `(@reactPath=...)` from returned lines.
 3. Use `react.findOne(criteria)` when uniqueness is required.
-4. Call `getReactStateAndHooks(reactPath)` and `getReactRenderedHtml(reactPath)` for deep inspection.
-5. Use `screenshotByXPath(htmlXPath)` when host-side screenshot clipping is needed.
+4. Call `getReactStateAndHooks(reactPath)` for state/hooks (and props in returned structure) inspection.
+5. Call `getReactRenderedHtml(reactPath)` for rendered output verification.
+6. Use `screenshotByXPath(htmlXPath)` only when host-side screenshot clipping is needed.
 
 ## `reactPath` Rules
 
